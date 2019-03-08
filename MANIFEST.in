@@ -1,0 +1,2 @@
+include config knockknock-daemon.py knockknock-genprofile.py
+recursive-include build/ *

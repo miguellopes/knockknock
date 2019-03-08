@@ -1,78 +1,83 @@
-"""Disk And Execution MONitor (Daemon)
+import sys, os, time, grp, pwd
+import signal
 
-Configurable daemon behaviors:
+redirect = "/dev/null"
+piddir = "/var/run/knockknock/"
+pidfile =piddir+"knock.pid"
 
-   1.) The current working directory set to the "/" directory.
-   2.) The current file creation mode mask set to 0.
-   3.) Close all open files (1024). 
-   4.) Redirect standard I/O streams to "/dev/null".
-
-A failed call to fork() now raises an exception.
-
-References:
-   1) Advanced Programming in the Unix Environment: W. Richard Stevens
-   2) Unix Programming Frequently Asked Questions:
-         http://www.erlenstar.demon.co.uk/unix/faq_toc.html
-"""
-
-__author__    = "Chad J. Schroeder"
-__copyright__ = "Copyright (C) 2005 Chad J. Schroeder"
-__revision__  = "$Id$"
-__version__   = "0.2"
-
-import os               # Miscellaneous OS interfaces.
-import sys              # System-specific parameters and functions.
-
-UMASK   = 0
-WORKDIR = "/"
-MAXFD   = 1024
-
-# The standard I/O file descriptors are redirected to /dev/null by default.
 if (hasattr(os, "devnull")):
    REDIRECT_TO = os.devnull
 else:
    REDIRECT_TO = "/dev/null"
 
 def createDaemon():
-   """Detach a process from the controlling terminal and run it in the
-   background as a daemon.
-   """
-
    try:
       pid = os.fork()
+      if pid > 0:
+      # exit first parent
+         sys.exit(0)
    except OSError, e:
-      raise Exception, "%s [%d]" % (e.strerror, e.errno)
+      sys.stderr.write("fork #1 failed: %d (%s)\n" % (e.errno, e.strerror))
+      sys.exit(1)
 
-   if (pid == 0):	# The first child.
-      os.setsid()
+# decouple from parent environment
+   os.chdir("/")
+   os.setsid()
+   os.umask(0)
 
-      try:
-         pid = os.fork()	# Fork a second child.
-      except OSError, e:
-         raise Exception, "%s [%d]" % (e.strerror, e.errno)
+# do second fork
+   try:
+      pid = os.fork()
+      if pid > 0:
+          # exit from second parent
+           sys.exit(0)
+   except OSError, e:
+      sys.stderr.write("fork #2 failed: %d (%s)\n" % (e.errno, e.strerror))
+      sys.exit(1)
 
-      if (pid == 0):	# The second child.
-         os.chdir(WORKDIR)
-         os.umask(UMASK)
-      else:
-         os._exit(0)	# Exit parent (the first child) of the second child.
-   else:
-      os._exit(0)	# Exit parent of the first child.
-
-#   import resource		# Resource usage information.
-#   maxfd = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
-#   if (maxfd == resource.RLIM_INFINITY):
-#      maxfd = MAXFD
-  
-   # Iterate through and close all file descriptors.
-#   for fd in range(0, maxfd):
-#      try:
-#         os.close(fd)
-#      except OSError:	# ERROR, fd wasn't open to begin with (ignored)
-#         pass
-
+# redirect standard file descriptors
    os.open(REDIRECT_TO, os.O_RDWR)	# standard input (0)
    os.dup2(0, 1)			# standard output (1)
    os.dup2(0, 2)			# standard error (2)
+   write_pid()
+   signal.signal(signal.SIGTERM,delpid)
 
-   return(0)
+# write pidfile
+def write_pid():
+   if not os.path.exists(piddir):
+      os.makedirs(piddir)
+   pid = str(os.getpid())
+   file(pidfile,'w+').write("%s\n" % pid)
+#change permissions on folder and pidfile.needed to delete pidfile withou root
+   uid = pwd.getpwnam("root").pw_uid
+   gid = grp.getgrnam("adm").gr_gid
+   os.chown(pidfile, uid, gid)
+   os.chown(piddir, uid, gid)
+   os.chmod(pidfile,0664)
+   os.chmod(piddir,0770)
+
+def delpid(signal, frame):
+   try:
+      if os.path.exists(pidfile):
+         os.remove(pidfile)
+   except IOError:
+     sys.stderr.write("Erro ao apagar o pidfile")
+   os._exit(1)
+
+def start():
+# Check for a pidfile to see if the daemon already runs
+   try:
+      pf = file(pidfile,'r')
+      pid = int(pf.read().strip())
+      pf.close()
+   except IOError:
+      pid = None
+
+   if pid:
+      message = "pidfile %s already exist. Daemon already running?\n"
+      sys.stderr.write(message % pidfile)
+      sys.exit(1)
+
+# Start the daemon
+   createDaemon()
+
